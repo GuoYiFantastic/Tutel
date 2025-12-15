@@ -127,12 +127,12 @@ def marlin_pack(w_unpacked):
     def unpack_weight_4d(packed_weight):
         # only for 4-bit weight packed in 8-bit (such as 2 fp4 in one uint8)
         device = packed_weight.device
-        # shape: [total_num_experts, out_feature, in_feature // groupsize, groupsize // 2]
-        E, N, G, half_groupsize = packed_weight.shape
-        w_bytes = packed_weight.view(E, N, G * half_groupsize)
+        # shape: [total_num_experts, out_feature, in_feature // group_size, group_size // 2]
+        E, N, G, half_group_size = packed_weight.shape
+        w_bytes = packed_weight.view(E, N, G * half_group_size)
         low = w_bytes & 0x0F
         high = (w_bytes >> 4) & 0x0F
-        # stack(..., dim=-1) -> [E, N, G*groupsize//2, 2] -> view -> [E, N, K]
+        # stack(..., dim=-1) -> [E, N, G*group_size//2, 2] -> view -> [E, N, K]
         w_unpacked = torch.stack([low, high], dim=-1).view(E, N, -1)
         # Marlin [In, Out]，GPTOSS [Out, In]
         return w_unpacked.transpose(1, 2).contiguous()
@@ -245,9 +245,9 @@ def marlin_nvfp4_process_global_scale(global_scale):
     exponent_bias = 2 ** (target_exponent - 1) - 2 ** (fp4_exponent - 1)
     return global_scale * (2.0 ** (exponent_bias - 7))
 
-def marlin_unpack(marlin_weight, groupsize):
+def marlin_unpack(marlin_weight, group_size):
     # reverse process of `marlin_pack()`
-    # groupsize 32/16 for mxfp4/nvfp4
+    # group_size 32/16 for mxfp4/nvfp4
 
     def _get_marlin_perms(device):
         perm = []
@@ -269,12 +269,12 @@ def marlin_unpack(marlin_weight, groupsize):
         perm = perm.reshape((-1, 8))[:, interleave].ravel()
         return torch.from_numpy(perm).long().to(device)
     
-    def pack_weight_4d(w_unpacked, groupsize = 32):
+    def pack_weight_4d(w_unpacked):
         # reverse process of `unpack_weight_4d()``
         w = w_unpacked.transpose(1, 2).contiguous()
         E, N, K = w.shape
-        if K % groupsize != 0:
-            raise ValueError(f"In_features ({K}) should be able to be divided by groupsize ({groupsize})")
+        if K % group_size != 0:
+            raise ValueError(f"In_features ({K}) should be able to be divided by group_size ({group_size})")
         
         # 2. Pack 4-bit into 8-bit
         # [E, N, K] -> [E, N, K//2, 2]
@@ -283,9 +283,9 @@ def marlin_unpack(marlin_weight, groupsize):
         high = w_pairs[..., 1].to(torch.uint8)
         # uint8: low | (high << 4)
         packed_val = low | (high << 4)
-        # shape: [E, N, K//2] -> [E, N, G, half_groupsize]
-        # where G = K // groupsize, half_groupsize = groupsize // 2
-        packed_weight = packed_val.view(E, N, K // groupsize, groupsize // 2)
+        # shape: [E, N, K//2] -> [E, N, G, half_group_size]
+        # where G = K // group_size, half_group_size = group_size // 2
+        packed_weight = packed_val.view(E, N, K // group_size, group_size // 2)
         return packed_weight
 
     device = marlin_weight.device
@@ -314,7 +314,7 @@ def marlin_unpack(marlin_weight, groupsize):
     w = w.reshape(E, K // tile, N // tile, tile, tile)
     w = w.permute(0, 1, 3, 2, 4)
     
-    w_unpacked = pack_weight_4d(w.reshape(E, K, N), groupsize)
+    w_unpacked = pack_weight_4d(w.reshape(E, K, N))
     
     return w_unpacked
 
