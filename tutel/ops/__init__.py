@@ -245,8 +245,10 @@ def marlin_nvfp4_process_global_scale(global_scale):
     exponent_bias = 2 ** (target_exponent - 1) - 2 ** (fp4_exponent - 1)
     return global_scale * (2.0 ** (exponent_bias - 7))
 
-def marlin_unpack(marlin_weight):
+def marlin_unpack(marlin_weight, groupsize):
     # reverse process of `marlin_pack()`
+    # groupsize 32/16 for mxfp4/nvfp4
+
     def _get_marlin_perms(device):
         perm = []
         for i in range(32):
@@ -312,7 +314,7 @@ def marlin_unpack(marlin_weight):
     w = w.reshape(E, K // tile, N // tile, tile, tile)
     w = w.permute(0, 1, 3, 2, 4)
     
-    w_unpacked = pack_weight_4d(w.reshape(E, K, N))
+    w_unpacked = pack_weight_4d(w.reshape(E, K, N), groupsize)
     
     return w_unpacked
 
